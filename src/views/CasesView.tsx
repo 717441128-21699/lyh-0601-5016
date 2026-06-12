@@ -347,13 +347,24 @@ export default function CasesView() {
                 <div className="space-y-2">
                   {showDetail.assignments.map(a => {
                     const amb = state.ambulances.find(x => x.id === a.ambulanceId);
+                    const isReinforcement = a.reinforecementAssignment === true;
+                    const isMain = !isReinforcement && showDetail.assignments[0]?.id === a.id;
                     return (
-                      <div key={a.id} className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-lg p-3 text-sm">
+                      <div key={a.id} className={clsx(
+                        'border rounded-lg p-3 text-sm',
+                        isMain ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-100' :
+                        isReinforcement ? 'bg-gradient-to-r from-amber-50 to-orange-50 border-amber-100' :
+                        'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-100'
+                      )}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center text-lg shadow-sm">🚑</div>
                             <div>
-                              <div className="font-semibold text-slate-800">{amb?.plateNumber || a.ambulanceId}</div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-semibold text-slate-800">{amb?.plateNumber || a.ambulanceId}</span>
+                                {isMain && <span className="px-1.5 py-0.5 bg-blue-600 text-white text-[9px] rounded font-medium">主派</span>}
+                                {isReinforcement && <span className="px-1.5 py-0.5 bg-amber-600 text-white text-[9px] rounded font-medium">增援</span>}
+                              </div>
                               <div className="text-[11px] text-slate-500">
                                 {amb?.crew.doctorName} / {amb?.driver.name}</div>
                             </div>
@@ -361,13 +372,22 @@ export default function CasesView() {
                           <div className="text-right text-xs text-slate-500">
                             <div>派车 {format(new Date(a.assignedAt), 'HH:mm:ss', { locale: zhCN })}</div>
                             {a.acceptedAt && <div>接单 {format(new Date(a.acceptedAt), 'HH:mm:ss', { locale: zhCN })}</div>}
-                            <div>评分: {a.score}分</div>
+                            {a.arrivedAtScene && <div>到达 {format(new Date(a.arrivedAtScene), 'HH:mm:ss', { locale: zhCN })}</div>}
+                            {a.arrivedAtHospital && <div>送达 {format(new Date(a.arrivedAtHospital), 'HH:mm:ss', { locale: zhCN })}</div>}
+                            <div className="text-slate-400">评分: {a.score}分</div>
                           </div>
                         </div>
                         {a.reinforecementRequested && (
-                          <div className="mt-2 text-[11px] bg-white rounded px-2 p-1.5 border border-amber-200 text-amber-700">
+                          <div className={clsx(
+                            'mt-2 text-[11px] rounded px-2 p-1.5 border',
+                            a.reinforecementApproved === true ? 'bg-green-50 border-green-200 text-green-700' :
+                            a.reinforecementApproved === false ? 'bg-red-50 border-red-200 text-red-700' :
+                            'bg-amber-50 border-amber-200 text-amber-700'
+                          )}>
                             增援请求: {a.notes || '未说明原因'} ·
-                            {a.reinforecementApproved ? ' ✓ 已批准' : ' 待审批'}
+                            {a.reinforecementApproved === true ? ' ✓ 已批准' :
+                             a.reinforecementApproved === false ? ' ✗ 已驳回' : ' ⏳ 待审批'}
+                            {a.approvedAt && ` · 审批时间 ${format(new Date(a.approvedAt), 'HH:mm:ss', { locale: zhCN })}`}
                           </div>
                         )}
                       </div>

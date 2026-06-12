@@ -262,6 +262,7 @@ function simulateTick(state: AppState): AppState {
   let newCases = [...newState.cases];
   let newAmbulances = [...newState.ambulances];
   let newNotifications = [...newState.notifications];
+  let newSystemActions: Array<{ type: 'autoComplete'; caseId: string; runAt: number }> = [];
 
   for (let i = 0; i < newCases.length; i++) {
     const c = newCases[i];
@@ -403,7 +404,13 @@ function simulateTick(state: AppState): AppState {
     if (c.status === 'transferred') {
       const elapsed = (Date.now() - new Date(c.hospitalArrivalTime!).getTime()) / 1000;
       if (elapsed > 1200 && Math.random() > 0.8) {
-        newCases[i] = { ...c, status: 'completed', closedAt: new Date().toISOString() };
+        // 系统自动完成 - 通过updateCaseStatus走标准流程，确保自动生成病历和结算
+        newCases[i] = { ...c, status: 'completed' };
+        newSystemActions.push({
+          type: 'autoComplete',
+          caseId: c.id,
+          runAt: Date.now() + 50, // 延后50ms在dispatch后执行
+        });
         const assignment = c.assignments.find(a => a.id === c.currentAssignmentId);
         if (assignment) {
           const ambIndex = newAmbulances.findIndex(a => a.id === assignment.ambulanceId);
@@ -464,6 +471,87 @@ function simulateTick(state: AppState): AppState {
         read: false,
         relatedAmbulanceId: amb.id,
       });
+    }
+  }
+
+  // 处理系统动作：系统自动完成的案件也需要自动生成病历和结算单
+  for (const action of newSystemActions) {
+    if (action.type === 'autoComplete') {
+      const caseIdx = newCases.findIndex(cc => cc.id === action.caseId);
+      if (caseIdx >= 0) {
+        const cc = newCases[caseIdx];
+        // 补全completed状态需要的字段
+        const totalTime = cc.sceneArrivalTime && cc.hospitalArrivalTime
+          ? Math.floor((new Date(cc.hospitalArrivalTime).getTime() - new Date(cc.sceneArrivalTime).getTime()) / 1000)
+          : undefined;
+        newCases[caseIdx] = {
+          ...cc,
+          closedAt: new Date().toISOString(),
+          totalTimeSeconds: totalTime,
+        };
+
+        // 自动生成电子病历
+        if (!cc.medicalRecordId) {
+          const mr: MedicalRecord = {
+            id: `MR${Date.now()}${cc.id.slice(-4)}`,
+            caseId: cc.id,
+            patientName: cc.patientName,
+            patientAge: cc.patientAge,
+            patientGender: cc.patientGender,
+            chiefComplaint: cc.symptomDesc,
+            presentIllness: `患者因${cc.symptomDesc}呼叫急救。现场查体：生命体征平稳，意识${cc.vitalSigns && cc.vitalSigns.length > 0 ? cc.vitalSigns[cc.vitalSigns.length - 1].consciousness : '清醒'}。初步处理：吸氧、心电监护、建立静脉通路。转运过程顺利。`,
+            physicalExam: `T ${cc.vitalSigns && cc.vitalSigns.length > 0 ? cc.vitalSigns[cc.vitalSigns.length - 1].temperature : 36.5}℃，P ${cc.vitalSigns && cc.vitalSigns.length > 0 ? cc.vitalSigns[cc.vitalSigns.length - 1].heartRate : 80}次/分，R ${cc.vitalSigns && cc.vitalSigns.length > 0 ? cc.vitalSigns[cc.vitalSigns.length - 1].respiratoryRate : 18}次/分，BP ${cc.vitalSigns && cc.vitalSigns.length > 0 ? cc.vitalSigns[cc.vitalSigns.length - 1].bloodPressureSystolic : 120}/${cc.vitalSigns && cc.vitalSigns.length > 0 ? cc.vitalSigns[cc.vitalSigns.length - 1].bloodPressureDiastolic : 80}mmHg，SpO2 ${cc.vitalSigns && cc.vitalSigns.length > 0 ? cc.vitalSigns[cc.vitalSigns.length - 1].oxygenSaturation : 98}%`,
+            diagnosis: cc.primaryDiagnosis || '待查',
+            treatment: ['心电监护', '吸氧', '静脉通路', '对症处理'],
+            vitalSignsHistory: cc.vitalSigns || [],
+            createdAt: new Date().toISOString(),
+            doctorName: '系统自动生成',
+          };
+          newState.medicalRecords = [...newState.medicalRecords, mr];
+          newCases[caseIdx] = { ...newCases[caseIdx], medicalRecordId: mr.id };
+          newNotifications.push({
+            id: `NOTIF${Date.now()}mr${cc.id}`,
+            type: 'success',
+            title: '电子病历已自动生成',
+            message: `案件 ${cc.caseNumber} 完成后系统已自动生成电子病历`,
+            createdAt: new Date().toISOString(),
+            read: false,
+            relatedCaseId: cc.id,
+          });
+        }
+
+        // 自动生成收费结算单
+        if (!cc.billingId) {
+          const distanceKm = cc.currentAssignment ? (cc.currentAssignment.distanceToScene / 1000) * 2 + 5 : 15;
+          const items: BillingItem[] = [
+            { name: '出诊费', quantity: 1, unitPrice: 150, amount: 150 },
+            { name: '里程费', quantity: +distanceKm.toFixed(1), unitPrice: 8, amount: Math.round(distanceKm * 8) },
+            { name: '治疗费', quantity: 1, unitPrice: 200, amount: 200 },
+            { name: '氧气费', quantity: 1, unitPrice: 80, amount: 80 },
+            { name: '心电监护', quantity: 1, unitPrice: 120, amount: 120 },
+          ];
+          const billing: Billing = {
+            id: `BL${Date.now()}${cc.id.slice(-4)}`,
+            caseId: cc.id,
+            patientName: cc.patientName,
+            items,
+            totalAmount: items.reduce((s, x) => s + x.amount, 0),
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+          };
+          newState.billings = [...newState.billings, billing];
+          newCases[caseIdx] = { ...newCases[caseIdx], billingId: billing.id };
+          newNotifications.push({
+            id: `NOTIF${Date.now()}bl${cc.id}`,
+            type: 'success',
+            title: '收费结算单已自动生成',
+            message: `案件 ${cc.caseNumber} 完成后系统已自动生成收费结算单`,
+            createdAt: new Date().toISOString(),
+            read: false,
+            relatedCaseId: cc.id,
+          });
+        }
+      }
     }
   }
 
@@ -620,9 +708,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     });
   }, [state.cases]);
 
-  const requestReinforcement = useCallback((caseId: string, reason: string, approve: boolean = true) => {
+  const requestReinforcement = useCallback((caseId: string, reason: string, approve: boolean = false) => {
     const c = state.cases.find(x => x.id === caseId);
     if (!c || !c.currentAssignmentId) return;
+
+    const assignmentUpdates: Partial<DispatchAssignment> = { 
+      reinforecementRequested: true, 
+      notes: reason 
+    };
+    // 只有明确要求批准时才设置approved=true，否则保持undefined表示待审批
+    if (approve) {
+      assignmentUpdates.reinforecementApproved = true;
+      assignmentUpdates.approvedAt = new Date().toISOString();
+    }
 
     dispatch({
       type: 'UPDATE_CASE',
@@ -630,7 +728,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         id: caseId,
         updates: {
           assignments: c.assignments.map(a =>
-            a.id === c.currentAssignmentId ? { ...a, reinforecementRequested: true, reinforecementApproved: approve, notes: reason } : a
+            a.id === c.currentAssignmentId ? { ...a, ...assignmentUpdates } : a
           ),
           escalationLevel: Math.max(c.escalationLevel, 1) as 0 | 1 | 2,
         },
@@ -640,7 +738,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     dispatch({
       type: 'ADD_NOTIFICATION',
       payload: {
-        type: approve ? 'warning' : 'info',
+        type: approve ? 'warning' : 'warning',
         title: approve ? '增援请求已批准' : '增援请求待审批',
         message: `案件 ${c.caseNumber} 请求增援：${reason}`,
         relatedCaseId: caseId,
@@ -652,6 +750,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       if (otherCandidates.length > 0) {
         const secondary = otherCandidates[0];
         const secondaryAssignment = createAssignment(caseId, secondary);
+        secondaryAssignment.reinforecementAssignment = true;
         dispatch({
           type: 'UPDATE_CASE',
           payload: {
@@ -659,6 +758,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             updates: {
               assignments: [...c.assignments, secondaryAssignment],
             },
+          },
+        });
+        dispatch({
+          type: 'ADD_NOTIFICATION',
+          payload: {
+            type: 'success',
+            title: '增援救护车已派出',
+            message: `${secondary.ambulance.plateNumber} 已作为增援车辆派出，预计${secondary.etaToScene}分钟到达`,
+            relatedCaseId: caseId,
+            relatedAmbulanceId: secondary.ambulance.id,
           },
         });
       }

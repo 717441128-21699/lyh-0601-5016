@@ -563,7 +563,7 @@ export default function DispatchView() {
                     </div>
 
                     {/* Vital signs */}
-                    {selectedCase.vitalSigns && selectedCase.vitalSigns.length > 0 && (
+                    {selectedCase.vitalSigns && selectedCase.vitalSigns.length > 0 ? (
                       <div>
                         <h4 className="font-bold text-slate-800 mb-3 flex items-center gap-1.5">
                           <Activity size={16} className="text-red-500" /> 实时生命体征
@@ -585,7 +585,7 @@ export default function DispatchView() {
                                 <div className={clsx('text-[10px] flex items-center gap-0.5', v.color)}>
                                   <Icon size={10} /> {v.label}
                                 </div>
-                                <div className="text-lg font-bold text-slate-800 mt-0.5">{v.value}<span className="text-[10px] font-normal text-slate-400 ml-0.5">{v.unit}</span></div>
+                                <div className="text-lg font-bold text-slate-800 mt-0.5">{v.value ?? '--'}<span className="text-[10px] font-normal text-slate-400 ml-0.5">{v.unit}</span></div>
                               </div>
                             );
                           })}
@@ -603,6 +603,18 @@ export default function DispatchView() {
                             </svg>
                           </div>
                           <div className="absolute top-1 right-2 text-[9px] text-cyan-300 font-mono">ECG Lead II</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border-2 border-dashed border-slate-200 py-4 px-4 text-center">
+                        <Activity size={24} className="mx-auto text-slate-300 mb-1.5" />
+                        <div className="text-sm text-slate-500">
+                          {selectedCase.status === 'dispatching' ? '等待救护车接单后开始监测' :
+                           selectedCase.status === 'waiting' ? '案件尚未派车' :
+                           '生命体征数据连接中...'}
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          包含心率、血压、血氧、呼吸、体温 5 项参数
                         </div>
                       </div>
                     )}

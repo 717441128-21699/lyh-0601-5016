@@ -395,35 +395,43 @@ export function generateMockCases(): EmergencyCase[] {
       currentAssignmentId,
       escalationLevel: priorityScore > 90 ? 2 : priorityScore > 70 ? 1 : 0,
       autoReassigned: Math.random() > 0.9,
-      vitalSigns: status !== 'waiting' ? generateVitalSigns(status) : undefined,
+      vitalSigns: status !== 'waiting' ? generateVitalSignsHistory(priority, status === 'completed' ? 8 : status === 'arrived' ? 5 : status === 'enroute' ? 3 : 1) : undefined,
     });
   }
 
   return cases;
 }
 
-export function generateVitalSigns(status: EmergencyCase['status']): VitalSigns[] {
+export function generateVitalSigns(priority: 'red' | 'yellow' | 'green' = 'yellow'): VitalSigns {
+  const baseVals = priority === 'red'
+    ? { heartRate: 105, bloodPressureSystolic: 145, bloodPressureDiastolic: 95, oxygenSaturation: 91, respiratoryRate: 24, temperature: 38.0 }
+    : priority === 'yellow'
+      ? { heartRate: 85, bloodPressureSystolic: 128, bloodPressureDiastolic: 84, oxygenSaturation: 96, respiratoryRate: 18, temperature: 37.2 }
+      : { heartRate: 72, bloodPressureSystolic: 118, bloodPressureDiastolic: 78, oxygenSaturation: 98, respiratoryRate: 16, temperature: 36.6 };
+
+  return {
+    timestamp: new Date().toISOString(),
+    heartRate: Math.max(50, Math.min(140, baseVals.heartRate + Math.floor(Math.random() * 16 - 8))),
+    bloodPressureSystolic: Math.max(85, Math.min(180, baseVals.bloodPressureSystolic + Math.floor(Math.random() * 14 - 7))),
+    bloodPressureDiastolic: Math.max(45, Math.min(105, baseVals.bloodPressureDiastolic + Math.floor(Math.random() * 8 - 4))),
+    oxygenSaturation: Math.min(100, Math.max(85, baseVals.oxygenSaturation + Math.floor(Math.random() * 6 - 3))),
+    respiratoryRate: Math.max(10, Math.min(32, baseVals.respiratoryRate + Math.floor(Math.random() * 6 - 3))),
+    temperature: +(Math.max(35.5, Math.min(40.0, baseVals.temperature + (Math.random() * 0.4 - 0.2)))).toFixed(1),
+    consciousness: (['alert', 'verbal', 'painful', 'unresponsive'] as const)[
+      priority === 'red' ? Math.floor(Math.random() * 4) : priority === 'yellow' ? Math.floor(Math.random() * 2) : 0
+    ],
+    ecgData: Array.from({ length: 50 }, () => Math.random() * 2 - 1),
+  };
+}
+
+// 生成多条历史生命体征记录（用于模拟数据初始化）
+export function generateVitalSignsHistory(priority: 'red' | 'yellow' | 'green', count: number): VitalSigns[] {
   const signs: VitalSigns[] = [];
-  const count = status === 'completed' ? 8 : status === 'arrived' ? 5 : status === 'enroute' ? 3 : 1;
-
   for (let i = 0; i < count; i++) {
-    const base = {
-      heartRate: 72 + Math.floor(Math.random() * 40 - 20),
-      bloodPressureSystolic: 120 + Math.floor(Math.random() * 40 - 20),
-      bloodPressureDiastolic: 80 + Math.floor(Math.random() * 20 - 10),
-      oxygenSaturation: Math.min(100, 92 + Math.floor(Math.random() * 9)),
-      respiratoryRate: 16 + Math.floor(Math.random() * 10 - 5),
-      temperature: +(36.5 + Math.random() * 1.5).toFixed(1),
-      consciousness: (['alert', 'verbal', 'painful', 'unresponsive'] as const)[i === 0 ? Math.floor(Math.random() * 3) : 0],
-    };
-
-    signs.push({
-      timestamp: new Date(Date.now() - (count - i) * 300000).toISOString(),
-      ...base,
-      ecgData: Array.from({ length: 50 }, () => Math.random() * 2 - 1),
-    });
+    const s = generateVitalSigns(priority);
+    s.timestamp = new Date(Date.now() - (count - i) * 300000).toISOString();
+    signs.push(s);
   }
-
   return signs;
 }
 

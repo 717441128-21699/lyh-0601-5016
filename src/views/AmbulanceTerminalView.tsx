@@ -24,12 +24,17 @@ export default function AmbulanceTerminalView() {
   const [reinforceOpen, setReinforceOpen] = useState(false);
   const [reinforceReason, setReinforceReason] = useState('');
 
+  // 需求4：显示所有未完成案件的所有assignments（包括主派和增援补派）
   const activeAssignments = state.cases
-    .filter(c => c.status !== 'completed' && c.status !== 'cancelled' && c.currentAssignmentId)
-    .map(c => {
-      const a = c.assignments.find(x => x.id === c.currentAssignmentId);
-      const amb = state.ambulances.find(x => x.id === a?.ambulanceId);
-      return { case: c, assignment: a, ambulance: amb };
+    .filter(c => c.status !== 'completed' && c.status !== 'cancelled' && c.assignments.length > 0)
+    .flatMap(c => {
+      // 对每个案件的每个assignment生成一条记录
+      return c.assignments
+        .filter(a => a.acceptedAt === undefined || a.arrivedAtHospital === undefined) // 只显示尚未完成的assignment
+        .map(a => {
+          const amb = state.ambulances.find(x => x.id === a.ambulanceId);
+          return { case: c, assignment: a, ambulance: amb };
+        });
     })
     .filter(x => x.ambulance);
 
@@ -46,8 +51,9 @@ export default function AmbulanceTerminalView() {
   const terminalCase = state.activeTerminalCaseId
     ? state.cases.find(c => c.id === state.activeTerminalCaseId)
     : selected?.case;
-  const terminalAssignment = terminalCase?.currentAssignmentId
-    ? terminalCase.assignments.find(a => a.id === terminalCase.currentAssignmentId)
+  // 需求4：根据选中的救护车找对应的assignment（可能是主派也可能是增援）
+  const terminalAssignment = terminalCase && selectedAmbulanceId
+    ? terminalCase.assignments.find(a => a.ambulanceId === selectedAmbulanceId)
     : selected?.assignment;
   const terminalAmbulance = terminalAssignment
     ? state.ambulances.find(a => a.id === terminalAssignment.ambulanceId)
@@ -494,7 +500,9 @@ export default function AmbulanceTerminalView() {
               <div className="flex-1 flex items-center justify-center text-slate-500 text-center text-sm flex-col">
                 <Activity size={40} className="mb-2 opacity-50" />
                 <div>暂无生命体征数据</div>
-                <div className="text-xs opacity-70 mt-1">到达现场后开始传输</div>
+                <div className="text-xs opacity-70 mt-1">
+                  {terminalCase?.status === 'dispatching' ? '接单后开始实时监测' : '数据加载中...'}
+                </div>
               </div>
             )}
           </div>
