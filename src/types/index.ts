@@ -162,6 +162,8 @@ export interface DispatchAssignment {
   score: number;
   reinforecementRequested?: boolean;
   reinforecementApproved?: boolean;
+  reinforecementAssignment?: boolean;
+  approvedAt?: string;
   notes?: string;
 }
 

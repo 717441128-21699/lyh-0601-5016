@@ -19,7 +19,7 @@ const statusMap: Record<string, string> = {
 };
 
 export default function AmbulanceTerminalView() {
-  const { state, dispatch, acceptAssignment, requestReinforcement, updateCaseStatus } = useAppState();
+  const { state, dispatch, advanceCaseStep, requestReinforcement, updateCaseStatus } = useAppState();
   const [selectedAmbulanceId, setSelectedAmbulanceId] = useState<string | null>(null);
   const [reinforceOpen, setReinforceOpen] = useState(false);
   const [reinforceReason, setReinforceReason] = useState('');
@@ -58,8 +58,21 @@ export default function AmbulanceTerminalView() {
 
   const handleAccept = () => {
     if (!terminalCase || !terminalAmbulance) return;
-    acceptAssignment(terminalCase.id, terminalAmbulance.id);
+    advanceCaseStep(terminalCase.id, terminalAmbulance.id, 0);
   };
+
+  // 需求1：4步按钮当前激活索引（用于状态显示）
+  const currentStepIndex = (() => {
+    if (!terminalCase) return -1;
+    switch (terminalCase.status) {
+      case 'dispatching': return 0;
+      case 'enroute': return terminalAssignment?.departedScene ? 1 : 0;
+      case 'arrived': return 2;
+      case 'transferred': return 3;
+      case 'completed': return 4;
+      default: return -1;
+    }
+  })();
 
   const handleReinforceSubmit = () => {
     if (!terminalCase || !reinforceReason) return;
@@ -67,6 +80,8 @@ export default function AmbulanceTerminalView() {
     setReinforceOpen(false);
     setReinforceReason('');
   };
+
+  const formatTime = (iso?: string) => iso ? format(new Date(iso), 'HH:mm:ss', { locale: zhCN }) : '--:--:--';
 
   return (
     <div className="h-full flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4 gap-3">
@@ -281,64 +296,110 @@ export default function AmbulanceTerminalView() {
           {/* Actions */}
           <div className="shrink-0 bg-slate-800/60 backdrop-blur rounded-2xl border border-slate-700/50 p-4">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-xs text-slate-400 font-semibold">案件进度</div>
+              <div className="text-xs text-slate-400 font-semibold">案件进度 · 一步一点逐步推进</div>
               {terminalAssignment && (
                 <div className="text-xs text-slate-400">
-                接警后 {formatDistanceToNow(new Date(terminalCase!.receivedAt), { locale: zhCN })}
-                {terminalAssignment.acceptedAt ? (' · 接单后 ' + formatDistanceToNow(new Date(terminalAssignment.acceptedAt), { locale: zhCN })) : ''}
-              </div>
-            )}
+                  接警后 {formatDistanceToNow(new Date(terminalCase!.receivedAt), { locale: zhCN })}
+                  {terminalAssignment.acceptedAt ? (' · 已接单') : ' · 待接单'}
+                </div>
+              )}
             </div>
-            <div className="mt-3 grid grid-cols-4 gap-2">
+
+            {/* 需求1：5步状态按钮 */}
+            <div className="mt-3 grid grid-cols-5 gap-2">
               {[
-                { key: 'dispatching', label: '接单', icon: <CheckCircle size={16} /> },
-                { key: 'enroute', label: '出发', icon: <Send size={16} /> },
-                { key: 'arrived', label: '到达', icon: <MapPin size={16} /> },
-                { key: 'transferred', label: '送达', icon: <CheckCircle size={16} /> },
-              ].map((step, i) => {
-                const statuses = ['dispatching', 'enroute', 'arrived', 'transferred'];
-                const currentIdx = statuses.indexOf(terminalCase?.status || '');
-                const done = currentIdx >= i || (terminalAssignment?.acceptedAt && i === 0);
-                const current = statuses.indexOf(terminalCase?.status || '') === i - 1;
+                { key: 'accept', label: '接单', icon: <CheckCircle size={16} />, step: 0 as const, time: terminalCase?.dispatchedAt || terminalAssignment?.acceptedAt, timeLabel: '派车' },
+                { key: 'depart', label: '出发', icon: <Send size={16} />, step: 1 as const, time: terminalAssignment?.departedScene, timeLabel: '出发' },
+                { key: 'arrive', label: '到达', icon: <MapPin size={16} />, step: 2 as const, time: terminalCase?.sceneArrivalTime, timeLabel: '到达现场' },
+                { key: 'transfer', label: '送达', icon: <Activity size={16} />, step: 3 as const, time: terminalCase?.hospitalArrivalTime, timeLabel: '送达医院' },
+                { key: 'complete', label: '完成', icon: <XCircle size={16} />, step: 4 as const, time: terminalCase?.closedAt, timeLabel: '关闭' },
+              ].map((btn, i) => {
+                const done = currentStepIndex > i;
+                const current = currentStepIndex === i;
+                const canClick = (() => {
+                  if (!terminalCase || !terminalAmbulance) return false;
+                  if (i === 0) return terminalCase.status === 'dispatching' && !terminalAssignment?.acceptedAt;
+                  if (i === 1) return terminalCase.status === 'enroute' && !terminalAssignment?.departedScene;
+                  if (i === 2) return terminalCase.status === 'enroute' && !!terminalAssignment?.departedScene;
+                  if (i === 3) return terminalCase.status === 'arrived';
+                  if (i === 4) return terminalCase.status === 'transferred';
+                  return false;
+                })();
                 return (
-                  <button
-                    key={step.key}
-                    disabled={!terminalCase || (!done && !current)}
-                    onClick={() => {
-                      if (!terminalCase) return;
-                      if (i === 0 && !terminalAssignment?.acceptedAt) {
-                        handleAccept();
-                      } else if (i === 1 && terminalCase.status === 'enroute') {
-                        updateCaseStatus(terminalCase.id, 'arrived');
-                      } else if (i === 2 && terminalCase.status === 'arrived') {
-                        updateCaseStatus(terminalCase.id, 'transferred');
-                      } else if (i === 3 && terminalCase.status === 'transferred') {
-                        updateCaseStatus(terminalCase.id, 'completed');
-                      }
-                    }}
-                    className={clsx(
-                      'flex flex-col items-center justify-center gap-1 py-3 rounded-xl text-xs font-semibold transition-all',
-                      done ? 'bg-green-500/20 text-green-400 border border-green-500/40' :
-                      current ? 'bg-blue-500 text-white shadow-lg shadow-blue-900/40 animate-pulse' :
-                      'bg-slate-700/60 text-slate-500 border border-slate-600/40 cursor-not-allowed'
-                    )}
-                  >
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center bg-current opacity-90">{step.icon}</div>
-                    {step.label}
-                    {done && <div className="text-[9px] opacity-80">✓ 完成</div>}
-                  </button>
+                  <div key={btn.key} className="flex flex-col items-center gap-1">
+                    <button
+                      disabled={!canClick}
+                      onClick={() => {
+                        if (!terminalCase || !terminalAmbulance) return;
+                        if (i === 0) advanceCaseStep(terminalCase.id, terminalAmbulance.id, 0);
+                        else if (i === 1) advanceCaseStep(terminalCase.id, terminalAmbulance.id, 1);
+                        else if (i === 2) advanceCaseStep(terminalCase.id, terminalAmbulance.id, 2);
+                        else if (i === 3) advanceCaseStep(terminalCase.id, terminalAmbulance.id, 3);
+                        else if (i === 4) updateCaseStatus(terminalCase.id, 'completed');
+                      }}
+                      className={clsx(
+                        'w-full flex flex-col items-center justify-center gap-1 py-2.5 rounded-xl text-xs font-semibold transition-all border',
+                        done ? 'bg-green-500/20 text-green-400 border-green-500/40' :
+                        current ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg shadow-blue-900/40 animate-pulse border-blue-400' :
+                        canClick ? 'bg-slate-700/80 hover:bg-slate-600 text-slate-200 border-slate-600 cursor-pointer' :
+                        'bg-slate-700/40 text-slate-500 border-slate-700/50 cursor-not-allowed opacity-60'
+                      )}
+                    >
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center bg-current opacity-90">{btn.icon}</div>
+                      <span>{btn.label}</span>
+                      {done && <div className="text-[9px] opacity-80">✓</div>}
+                    </button>
+                    <div className="text-[9px] text-slate-500 whitespace-nowrap">{btn.timeLabel}</div>
+                    <div className="text-[9px] font-mono text-slate-400">{formatTime(btn.time)}</div>
+                  </div>
                 );
               })}
             </div>
 
+            {/* 需求1+2：时间线 + 增援审批结果展示 */}
+            {terminalAssignment && (
+              <div className="mt-4 pt-3 border-t border-slate-700/50 space-y-1.5">
+                {[
+                  { label: '派车/接单', value: terminalCase.dispatchedAt || terminalAssignment.acceptedAt, color: 'text-blue-300' },
+                  { label: '从急救站出发', value: terminalAssignment.departedScene, color: 'text-cyan-300' },
+                  { label: '到达现场', value: terminalCase.sceneArrivalTime, color: 'text-emerald-300' },
+                  { label: '送达医院', value: terminalCase.hospitalArrivalTime, color: 'text-violet-300' },
+                  { label: '关闭案件', value: terminalCase.closedAt, color: 'text-slate-400' },
+                ].map((t, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className={t.color + ' font-medium'}>{t.label}</span>
+                    <span className="font-mono text-slate-300">{t.value ? format(new Date(t.value), 'MM-dd HH:mm:ss', { locale: zhCN }) : '-- : -- : --'}</span>
+                  </div>
+                ))}
+                {terminalAssignment.reinforecementRequested && (
+                  <div className={'mt-2 rounded-lg px-3 py-2 text-xs border ' + (
+                    terminalAssignment.reinforecementApproved === true ? 'bg-green-500/10 text-green-300 border-green-500/30' :
+                    terminalAssignment.reinforecementApproved === false ? 'bg-red-500/10 text-red-300 border-red-500/30' :
+                    'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                  )}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">
+                        {terminalAssignment.reinforecementApproved === true ? '✓ 增援请求已批准' :
+                         terminalAssignment.reinforecementApproved === false ? '✗ 增援请求已驳回' :
+                         '⏳ 增援请求待审批'}
+                      </span>
+                      {terminalAssignment.approvedAt && <span className="font-mono">{formatTime(terminalAssignment.approvedAt)}</span>}
+                    </div>
+                    <div className="mt-0.5 opacity-90">原因: {terminalAssignment.notes || '未说明'}</div>
+                    {terminalAssignment.reinforecementAssignment && <div className="mt-0.5 opacity-90">※ 此为增援补派车辆</div>}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="mt-3 flex gap-2 pt-3 border-t border-slate-700/50">
               <button
                 onClick={() => setReinforceOpen(true)}
-                disabled={!terminalCase || terminalAssignment?.reinforecementRequested}
+                disabled={!terminalCase || terminalAssignment?.reinforecementRequested === true}
                 className="flex-1 bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-400 border border-amber-500/40 disabled:cursor-not-allowed rounded-xl py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors"
               >
                 <ShieldCheck size={15} />
-                {terminalAssignment?.reinforecementRequested ? '增援已请求' : '请求增援'}
+                {terminalAssignment?.reinforecementRequested ? '增援已提交' : '请求增援'}
               </button>
               <button className="flex-1 bg-slate-700/60 hover:bg-slate-600/80 text-slate-200 rounded-xl py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors">
                 <PhoneCall size={15} /> 联系调度中心

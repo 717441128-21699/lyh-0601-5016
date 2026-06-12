@@ -24,7 +24,7 @@ const statusLabel: Record<EmergencyCase['status'], { label: string; color: strin
 };
 
 export default function DispatchView() {
-  const { state, dispatch, createNewCase, confirmDispatch } = useAppState();
+  const { state, dispatch, createNewCase, confirmDispatch, approveReinforcement } = useAppState();
   const [showNewCall, setShowNewCall] = useState(false);
   const [selectedTab, setSelectedTab] = useState<'active' | 'all'>('active');
 
@@ -420,20 +420,103 @@ export default function DispatchView() {
                           >
                             <Eye size={14} /> 查看车载终端
                           </button>
+                          {selectedAssignment.reinforecementRequested && selectedAssignment.reinforecementApproved === undefined && (
+                            <>
+                              <button
+                                onClick={() => approveReinforcement(selectedCase.id, selectedAssignment.id, true)}
+                                className="flex-1 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-1"
+                              >
+                                <CheckCircle size={14} /> 调度长批准
+                              </button>
+                              <button
+                                onClick={() => approveReinforcement(selectedCase.id, selectedAssignment.id, false)}
+                                className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-1"
+                              >
+                                <XCircle size={14} /> 驳回
+                              </button>
+                            </>
+                          )}
                           {!selectedAssignment.reinforecementRequested && ['enroute', 'arrived'].includes(selectedCase.status) && (
-                            <button className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-1">
-                              <ShieldCheck size={14} /> 批准增援
+                            <button
+                              className="flex-1 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-1 cursor-not-allowed"
+                              disabled
+                            >
+                              <ShieldCheck size={14} /> 无增援请求
                             </button>
                           )}
                         </div>
                         {selectedAssignment.reinforecementRequested && (
-                          <div className="mt-3 text-xs bg-amber-50 border border-amber-200 rounded-lg p-2.5 flex items-start gap-2">
-                            <AlertTriangle size={14} className="text-amber-600 mt-0.5 shrink-0" />
-                            <div>
-                              <b>增援请求:</b> {selectedAssignment.notes || '未注明原因'}
-                              {selectedAssignment.reinforecementApproved
-                                ? <span className="text-green-600 block mt-0.5">✓ 已批准</span>
-                                : <span className="text-amber-600 block mt-0.5">待调度长审批</span>}
+                          <div className={'mt-3 text-xs border rounded-lg p-3 flex items-start gap-2 ' + (
+                            selectedAssignment.reinforecementApproved === true ? 'bg-green-50 border-green-200' :
+                            selectedAssignment.reinforecementApproved === false ? 'bg-red-50 border-red-200' :
+                            'bg-amber-50 border-amber-200'
+                          )}>
+                            <AlertTriangle size={16} className={clsx(
+                              selectedAssignment.reinforecementApproved === true ? 'text-green-600' :
+                              selectedAssignment.reinforecementApproved === false ? 'text-red-600' :
+                              'text-amber-600',
+                              'mt-0.5 shrink-0'
+                            )} />
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between mb-0.5">
+                                <b className={
+                                  selectedAssignment.reinforecementApproved === true ? 'text-green-700' :
+                                  selectedAssignment.reinforecementApproved === false ? 'text-red-700' :
+                                  'text-amber-700'
+                                }>
+                                  {selectedAssignment.reinforecementApproved === true ? '✓ 增援请求已批准 · 已自动补派备选救护车' :
+                                   selectedAssignment.reinforecementApproved === false ? '✗ 增援请求已驳回' :
+                                   '⏳ 增援请求待调度长审批'}
+                                </b>
+                                {selectedAssignment.approvedAt && (
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {format(new Date(selectedAssignment.approvedAt), 'HH:mm:ss')}
+                                  </span>
+                                )}
+                              </div>
+                              <div>请求原因: {selectedAssignment.notes || '未注明原因'}</div>
+                              {selectedAssignment.reinforecementApproved === true && (
+                                <div className="mt-1 text-[11px] text-green-700 font-medium">
+                                  审批人: 调度长（自动生成补派车辆assignment）
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 增援派车列表（如果有） */}
+                        {selectedCase.assignments.length > 1 && (
+                          <div className="mt-4 pt-3 border-t border-slate-100">
+                            <div className="text-xs text-slate-500 mb-2 flex items-center gap-1 font-medium">
+                              <Users size={12} /> 本次案件全部派出车辆 ({selectedCase.assignments.length})
+                            </div>
+                            <div className="space-y-2">
+                              {selectedCase.assignments.map((a, idx) => {
+                                const amb = state.ambulances.find(x => x.id === a.ambulanceId);
+                                return (
+                                  <div key={a.id} className="border border-slate-200 rounded-lg p-2.5 bg-slate-50/60">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-2">
+                                        <div className="text-lg">{a.reinforecementAssignment ? '🚨' : idx === 0 ? '🚑' : '🚐'}</div>
+                                        <div>
+                                          <div className="text-sm font-semibold text-slate-800">
+                                            {amb?.plateNumber || a.ambulanceId}
+                                            {idx === 0 && <span className="ml-1.5 text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">主派</span>}
+                                            {a.reinforecementAssignment && <span className="ml-1.5 text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">增援补派</span>}
+                                          </div>
+                                          <div className="text-[11px] text-slate-500">
+                                            {amb?.crew.doctorName} · 司机{amb?.driver.name}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div className="text-right text-[11px] text-slate-500">
+                                        {a.assignedAt && <div>派车 {format(new Date(a.assignedAt), 'HH:mm:ss')}</div>}
+                                        {a.acceptedAt && <div>接单 {format(new Date(a.acceptedAt), 'HH:mm:ss')}</div>}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

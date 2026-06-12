@@ -372,10 +372,20 @@ function simulateTick(state: AppState): AppState {
           }
         }
       }
+    }
 
-      if ((i % 3 === 0) && c.vitalSigns && c.vitalSigns.length < 20) {
-        const lastSigns = c.vitalSigns[c.vitalSigns.length - 1];
-        const newSigns = {
+    // 需求4：从派车接单后（enroute / arrived / transferred 阶段）都持续生成生命体征
+    const isVitalActive = c.status === 'enroute' || c.status === 'arrived' || c.status === 'transferred';
+    if (isVitalActive) {
+      const currentSigns = newCases[i].vitalSigns || [];
+      if (currentSigns.length === 0) {
+        // 如果还没有任何生命体征（比如系统自动转的enroute，还没手动点接单），立即初始化第一条
+        const init = generateVitalSigns(c.priority);
+        newCases[i] = { ...newCases[i], vitalSigns: [init] };
+      } else if (currentSigns.length < 40 && Math.random() > 0.4) {
+        // 有数据时，40%概率追加一条（5秒tick约12秒一条，约8分钟内持续）
+        const lastSigns = currentSigns[currentSigns.length - 1];
+        const signs = {
           timestamp: new Date().toISOString(),
           heartRate: Math.max(50, Math.min(130, lastSigns.heartRate + Math.floor(Math.random() * 10 - 5))),
           bloodPressureSystolic: Math.max(90, Math.min(170, lastSigns.bloodPressureSystolic + Math.floor(Math.random() * 10 - 5))),
@@ -386,7 +396,7 @@ function simulateTick(state: AppState): AppState {
           consciousness: lastSigns.consciousness,
           ecgData: Array.from({ length: 50 }, () => Math.random() * 2 - 1),
         };
-        newCases[i] = { ...newCases[i], vitalSigns: [...c.vitalSigns, newSigns] };
+        newCases[i] = { ...newCases[i], vitalSigns: [...currentSigns, signs] };
       }
     }
 
@@ -472,6 +482,8 @@ interface AppStateContextType {
   confirmDispatch: (caseId: string) => void;
   acceptAssignment: (caseId: string, ambulanceId: string) => void;
   requestReinforcement: (caseId: string, reason: string, approve?: boolean) => void;
+  approveReinforcement: (caseId: string, assignmentId: string, approved: boolean) => void;
+  advanceCaseStep: (caseId: string, ambulanceId: string, step: 0 | 1 | 2 | 3) => void;
   updateCaseStatus: (caseId: string, status: EmergencyCase['status']) => void;
   generateMedicalRecord: (caseId: string) => void;
   generateBilling: (caseId: string) => void;
@@ -653,6 +665,172 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.cases, state.dispatchPlans]);
 
+  const advanceCaseStep = useCallback((caseId: string, ambulanceId: string, step: 0 | 1 | 2 | 3) => {
+    const c = state.cases.find(x => x.id === caseId);
+    if (!c || !c.currentAssignmentId) return;
+    const now = new Date().toISOString();
+
+    const assignment = c.assignments.find(a => a.id === c.currentAssignmentId);
+    if (!assignment) return;
+
+    const caseUpdates: Partial<EmergencyCase> = {};
+    const assignUpdates: Partial<typeof assignment> = {};
+    let ambStatus: Ambulance['status'] | null = null;
+
+    if (step === 0) {
+      // 0 = 接单：记录接单+派车时间，状态：dispatching → enroute
+      if (c.status !== 'dispatching') return;
+      caseUpdates.status = 'enroute';
+      if (!c.dispatchedAt) caseUpdates.dispatchedAt = assignment.assignedAt;
+      assignUpdates.acceptedAt = now;
+      ambStatus = 'enroute_to_scene';
+
+      // 立即初始化首条生命体征（需求4）
+      const firstSigns = generateVitalSigns(c.priority);
+      dispatch({ type: 'ADD_VITAL_SIGNS', payload: { caseId, signs: firstSigns } });
+
+      dispatch({
+        type: 'ADD_NOTIFICATION',
+        payload: { type: 'success', title: `接单成功 - ${c.caseNumber}`, message: `车辆前往现场，预计${assignment.etaToScene}分钟到达`, relatedCaseId: caseId },
+      });
+    } else if (step === 1) {
+      // 1 = 出发：离开急救站（保持enroute，不改变案件状态，只更新assignment）
+      if (c.status !== 'enroute') return;
+      assignUpdates.departedScene = now;
+      ambStatus = 'enroute_to_scene';
+    } else if (step === 2) {
+      // 2 = 到达现场：status enroute → arrived，记录到达+响应时长
+      if (c.status !== 'enroute') return;
+      const rt = Math.floor((new Date(now).getTime() - new Date(c.receivedAt).getTime()) / 1000);
+      caseUpdates.status = 'arrived';
+      caseUpdates.sceneArrivalTime = now;
+      caseUpdates.responseTimeSeconds = rt;
+      assignUpdates.arrivedAtScene = now;
+      ambStatus = 'on_scene';
+
+      dispatch({
+        type: 'ADD_NOTIFICATION',
+        payload: { type: 'success', title: `到达现场 - ${c.caseNumber}`, message: `响应时长 ${Math.floor(rt / 60)}分${rt % 60}秒`, relatedCaseId: caseId },
+      });
+
+      // 到达现场后立刻再追加一组生命体征
+      const signs = generateVitalSigns(c.priority);
+      dispatch({ type: 'ADD_VITAL_SIGNS', payload: { caseId, signs } });
+    } else if (step === 3) {
+      // 3 = 送达医院：status arrived → transferred，记录送达+运输时长
+      if (c.status !== 'arrived') return;
+      caseUpdates.status = 'transferred';
+      caseUpdates.hospitalArrivalTime = now;
+      if (c.sceneArrivalTime) {
+        caseUpdates.transportTimeSeconds = Math.floor((new Date(now).getTime() - new Date(c.sceneArrivalTime).getTime()) / 1000);
+      }
+      assignUpdates.arrivedAtHospital = now;
+      ambStatus = 'at_hospital';
+
+      dispatch({
+        type: 'ADD_NOTIFICATION',
+        payload: { type: 'success', title: `送达医院 - ${c.caseNumber}`, message: `已交接给${state.hospitals.find(h => h.id === assignment.hospitalId)?.name || '目的医院'}`, relatedCaseId: caseId },
+      });
+
+      // 送达后追加一组生命体征
+      const signs = generateVitalSigns(c.priority);
+      dispatch({ type: 'ADD_VITAL_SIGNS', payload: { caseId, signs } });
+    }
+
+    // 更新案件 + assignment
+    dispatch({
+      type: 'UPDATE_CASE',
+      payload: {
+        id: caseId,
+        updates: {
+          ...caseUpdates,
+          assignments: c.assignments.map(a => (a.id === assignment.id ? { ...a, ...assignUpdates } : a)),
+        },
+      },
+    });
+
+    // 更新救护车
+    if (ambStatus) {
+      let ambUpdates: Partial<Ambulance> = { status: ambStatus };
+      if (step === 2) {
+        ambUpdates.location = c.incidentLocation;
+      } else if (step === 3 && assignment.hospitalId) {
+        const hosp = state.hospitals.find(h => h.id === assignment.hospitalId);
+        if (hosp) ambUpdates.location = hosp.location;
+      }
+      if (step === 0) ambUpdates.currentCaseId = caseId;
+      dispatch({ type: 'UPDATE_AMBULANCE', payload: { id: ambulanceId, updates: ambUpdates } });
+    }
+  }, [state.cases, state.hospitals]);
+
+  const approveReinforcement = useCallback((caseId: string, assignmentId: string, approved: boolean) => {
+    const c = state.cases.find(x => x.id === caseId);
+    if (!c) return;
+
+    // 更新原assignment的审批状态
+    const newAssignments = c.assignments.map(a =>
+      a.id === assignmentId ? { ...a, reinforecementApproved: approved, approvedAt: new Date().toISOString() } : a
+    );
+    dispatch({
+      type: 'UPDATE_CASE',
+      payload: { id: caseId, updates: { assignments: newAssignments } },
+    });
+
+    dispatch({
+      type: 'ADD_NOTIFICATION',
+      payload: {
+        type: approved ? 'warning' : 'info',
+        title: approved ? '增援请求已批准' : '增援请求已驳回',
+        message: `案件 ${c.caseNumber} - ${approved ? '正在补派备选救护车' : '请自行处理现场情况'}`,
+        relatedCaseId: caseId,
+      },
+    });
+
+    // 批准后：自动补派一辆备选救护车
+    if (approved) {
+      const alternatives = state.dispatchPlans[caseId]?.alternatives || [];
+      // 筛选尚未派车的备选
+      const alreadyAssigned = new Set(c.assignments.map(a => a.ambulanceId));
+      const candidate = alternatives.find(a => !alreadyAssigned.has(a.ambulance.id));
+      if (candidate) {
+        const newAssignment = createAssignment(caseId, candidate);
+        newAssignment.reinforecementAssignment = true;
+        dispatch({
+          type: 'UPDATE_CASE',
+          payload: {
+            id: caseId,
+            updates: { assignments: [...newAssignments, newAssignment] },
+          },
+        });
+        dispatch({
+          type: 'ADD_NOTIFICATION',
+          payload: {
+            type: 'success',
+            title: '增援救护车已派出',
+            message: `${candidate.ambulance.plateNumber} 已作为增援车辆派出，预计${candidate.etaToScene}分钟到达`,
+            relatedCaseId: caseId,
+            relatedAmbulanceId: candidate.ambulance.id,
+          },
+        });
+      } else {
+        // 备选方案用完了，重新生成一次派车计划找空闲车辆
+        const plan = generateDispatchPlan(c, state.ambulances, state.hospitals);
+        const secondary = plan.alternatives.find(a => !alreadyAssigned.has(a.ambulance.id)) || plan.primary;
+        if (secondary && !alreadyAssigned.has(secondary.ambulance.id)) {
+          const newAssignment = createAssignment(caseId, secondary);
+          newAssignment.reinforecementAssignment = true;
+          dispatch({
+            type: 'UPDATE_CASE',
+            payload: {
+              id: caseId,
+              updates: { assignments: [...newAssignments, newAssignment] },
+            },
+          });
+        }
+      }
+    }
+  }, [state.cases, state.dispatchPlans, state.ambulances, state.hospitals]);
+
   const updateCaseStatus = useCallback((caseId: string, status: EmergencyCase['status']) => {
     const c = state.cases.find(x => x.id === caseId);
     if (!c) return;
@@ -669,6 +847,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
     if (status === 'completed') {
       updates.closedAt = now;
+      updates.totalTimeSeconds = Math.floor((new Date(now).getTime() - new Date(c.receivedAt).getTime()) / 1000);
     }
 
     dispatch({ type: 'UPDATE_CASE', payload: { id: caseId, updates } });
@@ -691,6 +870,67 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           },
         },
       });
+    }
+
+    // 需求3：案件完成后自动生成电子病历 + 收费结算单
+    if (status === 'completed' && c) {
+      setTimeout(() => {
+        const latest = state.cases.find(x => x.id === caseId) || c;
+        if (!latest.medicalRecordId) {
+          const record: MedicalRecord = {
+            id: `MR${Date.now()}`,
+            caseId,
+            chiefComplaint: latest.symptomDescription,
+            presentIllness: `患者${latest.patientAge}岁，${latest.patientGender === 'male' ? '男性' : latest.patientGender === 'female' ? '女性' : ''}，因"${latest.suspectedCondition}"于${new Date(latest.receivedAt).toLocaleString('zh-CN')}呼叫120。`,
+            pastHistory: '既往史：系统回顾未见明显异常（根据现场询问补充）。',
+            allergies: '否认药物过敏史。',
+            medications: '现场予吸氧、生命体征监测，必要时建立静脉通路。',
+            physicalExam: `T:${latest.vitalSigns?.[latest.vitalSigns.length - 1]?.temperature || 36.5}℃, P:${latest.vitalSigns?.[latest.vitalSigns.length - 1]?.heartRate || 80}次/分, R:${latest.vitalSigns?.[latest.vitalSigns.length - 1]?.respiratoryRate || 18}次/分, BP:${latest.vitalSigns?.[latest.vitalSigns.length - 1]?.bloodPressureSystolic || 120}/${latest.vitalSigns?.[latest.vitalSigns.length - 1]?.bloodPressureDiastolic || 80}mmHg, SpO2:${latest.vitalSigns?.[latest.vitalSigns.length - 1]?.oxygenSaturation || 98}%。`,
+            preliminaryDiagnosis: latest.suspectedCondition,
+            treatmentOnScene: '现场评估生命体征、对症处理，必要时吸氧/建立静脉通路。',
+            treatmentEnroute: '转运途中持续心电监护，密切观察病情变化。',
+            vitalSignsHistory: latest.vitalSigns || [],
+            createdAt: now(),
+            doctorSignature: '随车医师（电子签名）',
+          };
+          dispatch({ type: 'ADD_MEDICAL_RECORD', payload: record });
+          dispatch({ type: 'UPDATE_CASE', payload: { id: caseId, updates: { medicalRecordId: record.id } } });
+          dispatch({
+            type: 'ADD_NOTIFICATION',
+            payload: { type: 'info', title: `电子病历已生成`, message: `案件 ${latest.caseNumber} 自动生成电子病历 #${record.id}`, relatedCaseId: caseId },
+          });
+        }
+
+        const latest2 = state.cases.find(x => x.id === caseId) || c;
+        if (!latest2.billingId) {
+          const distance = assignment?.distanceToScene || 5;
+          const items = [
+            { id: `BI${Date.now()}1`, name: '急救出诊费', unit: '次', quantity: 1, unitPrice: 150, category: 'personnel' as const },
+            { id: `BI${Date.now()}2`, name: '救护车里程费', unit: '公里', quantity: Math.ceil(distance * 2), unitPrice: 12, category: 'mileage' as const },
+            { id: `BI${Date.now()}3`, name: '院前急救治疗费', unit: '次', quantity: 1, unitPrice: 280, category: 'personnel' as const },
+            { id: `BI${Date.now()}4`, name: '氧气使用费', unit: '小时', quantity: 1, unitPrice: 60, category: 'equipment' as const },
+            { id: `BI${Date.now()}5`, name: '心电图监测', unit: '次', quantity: 1, unitPrice: 80, category: 'equipment' as const },
+          ];
+          const total = items.reduce((s, it) => s + it.quantity * it.unitPrice, 0);
+          const insurance = Math.floor(total * 0.5);
+          const bill: Billing = {
+            id: `BL${Date.now()}`,
+            caseId,
+            items,
+            totalAmount: total,
+            insuranceCoverage: insurance,
+            patientPayable: total - insurance,
+            paymentStatus: 'pending',
+            createdAt: now(),
+          };
+          dispatch({ type: 'ADD_BILLING', payload: bill });
+          dispatch({ type: 'UPDATE_CASE', payload: { id: caseId, updates: { billingId: bill.id } } });
+          dispatch({
+            type: 'ADD_NOTIFICATION',
+            payload: { type: 'info', title: `收费结算单已生成`, message: `案件 ${latest2.caseNumber} 账单金额 ¥${total}，医保报销 ¥${insurance}，自付 ¥${total - insurance}`, relatedCaseId: caseId },
+          });
+        }
+      }, 300);
     }
   }, [state.cases]);
 
@@ -766,6 +1006,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         confirmDispatch,
         acceptAssignment,
         requestReinforcement,
+        approveReinforcement,
+        advanceCaseStep,
         updateCaseStatus,
         generateMedicalRecord,
         generateBilling,

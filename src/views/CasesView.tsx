@@ -263,10 +263,24 @@ export default function CasesView() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-6">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
             <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                <FileText size={18} className="text-red-600" />
-                案件详情 - {showDetail.caseNumber}
-              </h3>
+              <div className="flex items-center gap-3">
+                <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                  <FileText size={18} className="text-red-600" />
+                  案件详情 - {showDetail.caseNumber}
+                </h3>
+                <div className="flex items-center gap-1.5 text-[10px]">
+                  {showDetail.medicalRecordId ? (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">✓ 电子病历已生成</span>
+                  ) : showDetail.status === 'completed' ? (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium animate-pulse">⏳ 病历生成中...</span>
+                  ) : null}
+                  {showDetail.billingId ? (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">✓ 收费结算已生成</span>
+                  ) : showDetail.status === 'completed' ? (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium animate-pulse">⏳ 结算生成中...</span>
+                  ) : null}
+                </div>
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => exportCaseDetail(showDetail)}
@@ -451,8 +465,37 @@ export default function CasesView() {
                 </div>
               )}
             </div>
-            <div className="border-t border-slate-100 bg-slate-50 px-5 py-3 flex justify-end">
-              <button onClick={() => setShowDetail(null)} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-sm">关闭</button>
+            <div className="border-t border-slate-100 bg-slate-50 px-5 py-3 flex items-center justify-between">
+              <div className="text-xs text-slate-500">
+                {showDetail.status === 'completed' && !showDetail.medicalRecordId && (
+                  <span className="text-amber-600">⏳ 系统正在自动生成电子病历与费用结算...</span>
+                )}
+                {showDetail.status === 'completed' && showDetail.medicalRecordId && (
+                  <span className="text-emerald-600">✓ 案件已完成归档，电子病历与费用结算已自动生成</span>
+                )}
+                {showDetail.status !== 'completed' && (
+                  <span>当前状态: <b className={statusLabel[showDetail.status].color + ' px-1.5 py-0.5 rounded text-white ml-0.5'}>{statusLabel[showDetail.status].label}</b></span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {showDetail.status === 'completed' && !showDetail.medicalRecordId && (
+                  <button
+                    onClick={() => generateMedicalRecord(showDetail.id)}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded-lg flex items-center gap-1"
+                  >
+                    <FilePlus size={12} /> 立即生成病历
+                  </button>
+                )}
+                {showDetail.status === 'completed' && !showDetail.billingId && (
+                  <button
+                    onClick={() => generateBilling(showDetail.id)}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-lg flex items-center gap-1"
+                  >
+                    <Receipt size={12} /> 立即生成账单
+                  </button>
+                )}
+                <button onClick={() => setShowDetail(null)} className="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-sm">关闭</button>
+              </div>
             </div>
           </div>
         </div>
